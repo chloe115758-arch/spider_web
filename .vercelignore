@@ -2,5 +2,6 @@
 web_image_ref
 webs/web1.png
 
-# 배경 음악 파일은 배포하지 않아요 (저작권)
-music
+# music 폴더에서는 bgm.mp3 만 배포해요 (과제용 — 과제가 끝나면 지워요)
+music/*
+!music/bgm.mp3

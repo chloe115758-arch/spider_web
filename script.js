@@ -69,10 +69,12 @@ function stopMusic() {
   document.getElementById("youtube-box").hidden = true;
 }
 
-// 쏘는 동작 = "거미줄 손 모양"(중지 · 약지를 접은 손)에서, 접은 두 손가락의 등이 위에서 아래로 내려오는 것
-const DROP_MS = 450; // 이 시간 안에 내려와야 해요
-const DROP_AMOUNT = 0.5; // 얼마나 내려와야 하는지 (손바닥 길이의 몇 배 · 작게 하면 살짝만 내려도 쏴져요)
-const POSE_RATIO = 0.6; // 내려오는 동안 손 모양이 이 비율 이상 유지돼야 해요 (0~1 · 높을수록 깐깐해요)
+// 쏘는 동작 = "거미줄 손 모양"(중지 · 약지를 접은 손)에서 손목을 까딱하는 것
+// (손이 향한 방향이 짧은 시간에 휙 꺾이면 쏴요. 손을 옮기기만 하면 방향이 그대로라 안 쏴져요)
+const FLICK_MS = 350; // 이 시간 안에 꺾여야 해요 (천천히 기울이는 것은 까딱이 아니에요)
+const FLICK_ANGLE = 25; // 몇 도 넘게 꺾여야 하는지 (작게 하면 살짝만 까딱해도 쏴져요)
+const FLICK_REST_MS = 500; // 쏜 뒤 이만큼은 쉬어요 (까딱한 손이 돌아오는 움직임에 또 쏘지 않게)
+const POSE_RATIO = 0.6; // 까딱하는 동안 손 모양이 이 비율 이상 유지돼야 해요 (0~1 · 높을수록 깐깐해요)
 // 손 인식을 얼마나 깐깐하게 할지 (0~1 · 높을수록 확실한 손만 인정해요. 기본값은 0.5)
 const HAND_CONFIDENCE = 0.7;
 const PALM_GRACE_MS = 250; // 손바닥 인식이 이만큼 잠깐 끊기는 것은 봐줘요
@@ -81,10 +83,9 @@ const THUMB_OPEN = 0.45; // 엄지 끝이 손바닥 가운데에서 이만큼(�
 const PALM_WIDTH = 0.42; // 손바닥 폭이 길이의 이 비율보다 넓어야 "정면" (정면 손바닥은 0.5쯤)
 const SIDE_CONFIDENCE = 0.8; // 왼손 · 오른손 구분을 이만큼 확신할 때만 손바닥으로 인정 (0~1)
 
-// 거미줄 그림 8장 (webs 폴더 · 배경이 투명한 PNG). 쏠 때마다 이 중 하나가 랜덤으로 나와요.
+// 거미줄 그림 7장 (webs 폴더 · 배경이 투명한 PNG). 쏠 때마다 이 중 하나가 랜덤으로 나와요.
 // 그림을 더 넣으려면 webs 폴더에 파일을 넣고 여기에 이름을 추가하면 돼요. 빼려면 이름을 지워요.
 const WEB_IMAGES = [
-  "web3.png",
   "web5.png",
   "web6.png",
   "web7.png",
@@ -101,7 +102,7 @@ const WEB_IMAGES = [
 // 손바닥을 보여 주면 천장에서 줄을 타고 내려오는 캐릭터 그림
 const HERO_IMAGE = new Image();
 HERO_IMAGE.src = "webs/hero.png";
-const HERO_SHOW_MS = 400; // 손바닥을 이만큼 보여 주면 등장
+const HERO_SHOW_MS = 100; // 손바닥을 이만큼 보여 주면 등장 (0 에 가까울수록 빨리 나오지만, 잠깐 잘못 본 것에도 나올 수 있어요)
 const HERO_HIDE_MS = 600; // 손바닥이 이만큼 안 보이면 퇴장
 const HERO_SIZE = 0.6; // 그림 높이 (창 높이의 몇 배)
 const HERO_BOUNCE = 1.6; // 1초에 출렁이는 횟수 (크면 빠르게 "띠용띠용")
@@ -132,7 +133,7 @@ const hands = new Map(); // 손마다 "최근에 어디 있었는지 · 쏠 준�
 
 // ───────── 계산 도우미 ─────────
 // 점 번호: 0 손목 · 5 검지 뿌리 · 8 검지 끝 · 9 중지 뿌리
-// 쏘는 때 = 접은 두 손가락의 등이 아래로 내려올 때 · 쏘는 곳 = 그 등이 있는 자리
+// 쏘는 때 = 손목을 까딱할 때 · 쏘는 곳 = 접은 두 손가락의 등이 있는 자리
 function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
@@ -140,6 +141,18 @@ function distance(a, b) {
 // 깊이(z)까지 넣은 거리. 손을 앞으로 기울여도 손가락 길이를 제대로 재려고 써요.
 function distance3(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0));
+}
+
+// 점 a 에서 b 로 향하는 방향 (길이를 1 로 맞춘 화살표)
+function direction(a, b) {
+  const length = distance3(a, b) || 1;
+  return { x: (b.x - a.x) / length, y: (b.y - a.y) / length, z: (b.z - a.z) / length };
+}
+
+// 두 방향이 몇 도 벌어졌는지 (같은 방향이면 0)
+function angleBetween(u, v) {
+  const dot = u.x * v.x + u.y * v.y + u.z * v.z;
+  return (Math.acos(Math.min(1, Math.max(-1, dot))) * 180) / Math.PI;
 }
 
 // 손가락이 펴졌는지: 손가락 끝이 가운데 마디보다 손목에서 더 멀면 편 거예요.
@@ -366,8 +379,8 @@ function handleFrame(result, now) {
   result.landmarks.forEach((landmarks, index) => {
     const name = result.handedness[index]?.[0]?.categoryName ?? String(index);
     seenHands.add(name);
-    // history = 최근 높이 기록 · armed = 쏠 준비가 됐는지 · firedY = 마지막으로 쏜 높이 · aim = 빨간 점 위치
-    const state = hands.get(name) ?? { history: [], armed: true, firedY: 0, aim: null };
+    // history = 최근 손 방향 기록 · firedAt = 마지막으로 쏜 시각 · aim = 빨간 점 위치
+    const state = hands.get(name) ?? { history: [], firedAt: -Infinity, aim: null };
     hands.set(name, state);
 
     // 점 위치(0~1 비율)를 창 안의 위치(픽셀)로 옮겨요. 거울처럼 움직이도록 x 는 좌우를 뒤집어요.
@@ -381,17 +394,30 @@ function handleFrame(result, now) {
       palmX = toScreen({ x: (landmarks[0].x + landmarks[9].x) / 2, y: 0 }).x / width;
     }
 
-    // ── 쏘기: 접은 두 손가락의 "등" = 중지 가운데 마디(10)와 약지 가운데 마디(14)의 중간 ──
-    // 이 한 점만 따라가요. y 는 아래로 갈수록 커져요.
+    // ── 쏘기: 손목 까딱 ──
+    const pose = isWebPose(landmarks);
+    if (pose) poseSeen = true;
+
+    // 손이 향한 방향 = 손목(0) → 중지 뿌리(9). 손목을 까딱하면 이 방향이 휙 꺾여요.
+    // worldLandmarks = 손을 실제 크기(미터)의 입체로 잰 좌표예요. 화면 속 위치와 상관없어서,
+    // 손을 옮기기만 하면 방향은 그대로예요.
+    const world = result.worldLandmarks[index];
+    const tilt = direction(world[0], world[9]);
+    // 최근 FLICK_MS 동안의 방향과, 그때 손 모양이 맞았는지를 기억해요.
+    state.history.push({ time: now, tilt, pose });
+    state.history = state.history.filter((item) => now - item.time <= FLICK_MS);
+    // 그동안의 방향 중 지금과 가장 많이 벌어진 각도
+    const turned = Math.max(...state.history.map((item) => angleBetween(item.tilt, tilt)));
+    // 그동안 손 모양이 얼마나 유지됐는지 (까딱하는 순간 잠깐 잘못 본 프레임은 봐줘요)
+    const poseKept =
+      state.history.filter((item) => item.pose).length / state.history.length >= POSE_RATIO;
+
+    // 빨간 점: 접은 두 손가락의 "등" = 중지 가운데 마디(10)와 약지 가운데 마디(14)의 중간.
+    // 거미줄 손 모양일 때만 보여요. (부드럽게 따라가요)
     const knuckle = {
       x: (landmarks[10].x + landmarks[14].x) / 2,
       y: (landmarks[10].y + landmarks[14].y) / 2,
     };
-    const palmLength = distance(landmarks[0], landmarks[9]); // 손 크기의 기준
-    const pose = isWebPose(landmarks);
-    if (pose) poseSeen = true;
-
-    // 빨간 점: 거미줄 손 모양일 때만, 접은 두 손가락의 등 위에 보여요. (부드럽게 따라가요)
     if (pose) {
       const onScreen = toScreen(knuckle);
       const target = {
@@ -405,27 +431,13 @@ function handleFrame(result, now) {
           }
         : target;
       aims.push(state.aim);
-    } else {
-      state.aim = null;
+    } else if (!poseKept) {
+      state.aim = null; // 손 모양을 풀었으면 점을 지워요 (까딱하다 잠깐 놓친 것은 그대로 둬요)
     }
 
-    // 최근 DROP_MS 동안의 높이와, 그때 손 모양이 맞았는지를 기억해요.
-    state.history.push({ time: now, y: knuckle.y, pose });
-    state.history = state.history.filter((item) => now - item.time <= DROP_MS);
-    // 그동안 가장 높이 있던 곳에서 지금까지 얼마나 내려왔는지
-    const highest = Math.min(...state.history.map((item) => item.y));
-    const dropped = knuckle.y - highest >= palmLength * DROP_AMOUNT;
-    // 그동안 손 모양이 얼마나 유지됐는지 (잠깐 잘못 본 프레임은 봐줘요)
-    const poseKept =
-      state.history.filter((item) => item.pose).length / state.history.length >= POSE_RATIO;
-
-    if (!pose || knuckle.y < state.firedY - palmLength * DROP_AMOUNT * 0.5) {
-      // 손 모양을 풀었거나, 쏜 자리보다 손을 다시 올렸으면 → 또 쏠 수 있어요
-      state.armed = true;
-    }
-
-    if (pose && poseKept && dropped && state.armed) {
-      // 쏘기! 빨간 점이 있는 자리(접은 두 손가락의 등)에 거미줄을 붙여요.
+    const rested = now - state.firedAt >= FLICK_REST_MS;
+    if (state.aim && poseKept && turned >= FLICK_ANGLE && rested) {
+      // 쏘기! 빨간 점이 있던 자리(접은 두 손가락의 등)에 거미줄을 붙여요.
       webs.push({
         x: state.aim.x,
         y: state.aim.y,
@@ -437,9 +449,8 @@ function handleFrame(result, now) {
       playShootSound(); // 슈욱-챱!
       shots++;
       shotsText.textContent = `쏜 거미줄 ${shots}개`;
-      state.armed = false; // 한 번 내릴 때 한 발만
-      state.firedY = knuckle.y;
-      state.history = []; // 기록을 비워서, 다시 내려와야 또 쏴져요
+      state.firedAt = now; // 한 번 까딱에 한 발만
+      state.history = []; // 기록을 비워서, 다시 까딱해야 또 쏴져요
     }
   });
 
@@ -463,7 +474,7 @@ function handleFrame(result, now) {
 
   // 손 그림은 그리지 않아요. 대신 손을 찾았는지만 글자로 알려 줘요. (바뀔 때만 고쳐요)
   const status = poseSeen
-    ? "거미줄 손 모양이에요 · 아래로 내리면 쏴져요"
+    ? "거미줄 손 모양이에요 · 손목을 까딱하면 쏴져요"
     : palmX !== null
       ? "손바닥이 보여요"
       : seenHands.size > 0
@@ -553,7 +564,7 @@ function stopCamera() {
   drawAll(performance.now());
   handText.textContent = "";
   placeholder.hidden = false;
-  placeholder.textContent = "카메라를 켜고, 중지 · 약지를 접은 손을 위에서 아래로 내려 보세요";
+  placeholder.textContent = "카메라를 켜고, 중지 · 약지를 접은 손의 손목을 까딱해 보세요";
   cameraBtn.textContent = "카메라 켜기";
   cameraBtn.disabled = false;
 }
@@ -562,7 +573,7 @@ function showMessage(text) {
   stopMusic(); // 카메라를 못 켰으면 음악도 멈춰요
   messageText.textContent = text;
   messageText.hidden = false;
-  placeholder.textContent = "카메라를 켜고, 중지 · 약지를 접은 손을 위에서 아래로 내려 보세요";
+  placeholder.textContent = "카메라를 켜고, 중지 · 약지를 접은 손의 손목을 까딱해 보세요";
   cameraBtn.disabled = false;
 }
 
