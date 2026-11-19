@@ -1,3 +1,7 @@
 .DS_Store
 .vercel
 .env*
+
+# 배경 음악 파일은 올리지 않아요 (저작권)
+music/*
+!music/여기에_노래_넣기.txt

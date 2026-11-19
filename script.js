@@ -12,11 +12,74 @@ const MODEL_URL =
 const GROW_MS = 280; // 거미줄이 펼쳐지는 시간
 const HOLD_MS = 2000; // 붙은 뒤 그대로 있는 시간 (2초)
 const FADE_MS = 1500; // 그 뒤 서서히 사라지는 시간
-const REACH = 3; // 검지 끝에서 "손가락 길이의 몇 배"만큼 더 간 곳을 가리켜요 (크게 하면 멀리 쏴요)
-const AIM_SMOOTH = 0.12; // 빨간 점이 손을 따라가는 빠르기 (0~1 · 작을수록 천천히 · 부드럽게 움직여요)
+const AIM_SMOOTH = 0.3; // 빨간 점이 손을 따라가는 빠르기 (0~1 · 작을수록 천천히 · 부드럽게 움직여요)
 const SHOW_AIM = true; // 조준점(빨간 작은 점)을 보여 줄지. 안 보이게 하려면 false
-const DROP_MS = 400; // 이 시간 안에 손이 내려와야 "내렸다"로 쳐요
-const DROP_AMOUNT = 0.6; // 얼마나 내려와야 하는지 (손바닥 길이의 몇 배 · 작게 하면 살짝만 내려도 쏴져요)
+const SOUND_ON = true; // 쏠 때 "슈욱-챱" 효과음을 낼지. 끄려면 false
+const SOUND_VOLUME = 0.6; // 효과음 크기 (0~1)
+// 배경 음악: music 폴더에 bgm.mp3 를 넣으면 카메라를 켤 때 재생돼요. (파일이 없으면 조용히 넘어가요)
+const MUSIC = new Audio("music/bgm.mp3");
+MUSIC.loop = true; // 끝나면 처음부터 다시
+MUSIC.volume = 0.4; // 음악 크기 (0~1 · 효과음이 묻히지 않게 조금 작게)
+
+// 유튜브 배경 음악: bgm.mp3 가 없으면 이 영상을 유튜브 플레이어로 재생해요.
+// (영상에서 소리를 뽑아 저장하는 게 아니라, 유튜브에서 직접 틀어 주는 방식이에요)
+const YOUTUBE_ID = "ApXoWvfEYVU"; // 유튜브 주소의 youtu.be/ 뒤에 오는 글자. 다른 영상으로 바꾸려면 여기만 바꿔요
+const YOUTUBE_VOLUME = 40; // 유튜브 음악 크기 (0~100)
+let youtube = null; // 유튜브 플레이어 (준비되면 채워져요)
+
+// 유튜브 플레이어는 인터넷 주소(http · https)로 연 페이지에서만 동작해요.
+// (파일을 더블클릭해서 연 경우에는 유튜브가 재생을 막아요)
+if (location.protocol.startsWith("http")) {
+  const api = document.createElement("script");
+  api.src = "https://www.youtube.com/iframe_api";
+  document.head.append(api);
+  // 유튜브 프로그램이 다 불러와지면 이 이름의 함수를 불러 줘요. (유튜브가 정한 약속)
+  window.onYouTubeIframeAPIReady = () => {
+    const player = new YT.Player("youtube-player", {
+      videoId: YOUTUBE_ID,
+      // playsinline: 휴대폰에서 전체 화면으로 넘어가지 않게 · loop + playlist: 끝나면 반복
+      playerVars: { playsinline: 1, loop: 1, playlist: YOUTUBE_ID },
+      events: {
+        onReady: () => {
+          player.setVolume(YOUTUBE_VOLUME);
+          youtube = player;
+        },
+        // 유튜브가 재생을 거절하면(영상이 내려갔거나 다른 사이트 재생이 막힌 경우) 플레이어를 숨겨요.
+        onError: (event) => {
+          console.warn("유튜브 재생 오류 코드:", event.data);
+          youtube = null;
+          document.getElementById("youtube-box").hidden = true;
+        },
+      },
+    });
+  };
+}
+
+// 음악 켜기 · 끄기: bgm.mp3 가 있으면 그 파일을, 없으면 유튜브를 써요.
+function startMusic() {
+  MUSIC.play().catch(() => {
+    youtube?.playVideo();
+    if (youtube) document.getElementById("youtube-box").hidden = false;
+  });
+}
+
+function stopMusic() {
+  MUSIC.pause(); // 다시 켜면 멈춘 곳부터 이어져요
+  youtube?.pauseVideo();
+  document.getElementById("youtube-box").hidden = true;
+}
+
+// 쏘는 동작 = "거미줄 손 모양"(중지 · 약지를 접은 손)에서, 접은 두 손가락의 등이 위에서 아래로 내려오는 것
+const DROP_MS = 450; // 이 시간 안에 내려와야 해요
+const DROP_AMOUNT = 0.5; // 얼마나 내려와야 하는지 (손바닥 길이의 몇 배 · 작게 하면 살짝만 내려도 쏴져요)
+const POSE_RATIO = 0.6; // 내려오는 동안 손 모양이 이 비율 이상 유지돼야 해요 (0~1 · 높을수록 깐깐해요)
+// 손 인식을 얼마나 깐깐하게 할지 (0~1 · 높을수록 확실한 손만 인정해요. 기본값은 0.5)
+const HAND_CONFIDENCE = 0.7;
+const PALM_GRACE_MS = 250; // 손바닥 인식이 이만큼 잠깐 끊기는 것은 봐줘요
+// 손바닥 인식 기준 (실제 손 사진으로 재 본 값이에요. 숫자를 키우면 더 깐깐해져요)
+const THUMB_OPEN = 0.45; // 엄지 끝이 손바닥 가운데에서 이만큼(손바닥 길이의 몇 배) 떨어져야 "폈다" (편 엄지는 0.57 이상, 접은 엄지는 0.2쯤)
+const PALM_WIDTH = 0.42; // 손바닥 폭이 길이의 이 비율보다 넓어야 "정면" (정면 손바닥은 0.5쯤)
+const SIDE_CONFIDENCE = 0.8; // 왼손 · 오른손 구분을 이만큼 확신할 때만 손바닥으로 인정 (0~1)
 
 // 거미줄 그림 8장 (webs 폴더 · 배경이 투명한 PNG). 쏠 때마다 이 중 하나가 랜덤으로 나와요.
 // 그림을 더 넣으려면 webs 폴더에 파일을 넣고 여기에 이름을 추가하면 돼요. 빼려면 이름을 지워요.
@@ -62,34 +125,131 @@ let shots = 0; // 쏜 횟수
 let webs = []; // 화면에 붙은 거미줄들
 let hero = null; // 내려와 있는 캐릭터 { x: 가로 위치(0~1), born: 등장한 시각, leaveAt: 퇴장 시작 시각 }
 let palmSince = null; // 손바닥이 보이기 시작한 시각
-let palmGoneSince = null; // 손바닥이 안 보이기 시작한 시각
+let palmLastSeen = -Infinity; // 손바닥을 마지막으로 본 시각
+let audio = null; // 소리를 만드는 도구 (카메라 버튼을 누를 때 만들어요)
 let aims = []; // 지금 검지가 가리키는 자리들 (손마다 하나 · 화면에서의 위치 0~1 비율)
 const hands = new Map(); // 손마다 "최근에 어디 있었는지 · 쏠 준비가 됐는지"
 
 // ───────── 계산 도우미 ─────────
 // 점 번호: 0 손목 · 5 검지 뿌리 · 8 검지 끝 · 9 중지 뿌리
-// 쏘는 때 = 손이 아래로 내려올 때 · 쏘는 곳 = 검지가 가리키는 곳
+// 쏘는 때 = 접은 두 손가락의 등이 아래로 내려올 때 · 쏘는 곳 = 그 등이 있는 자리
 function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-// 손가락이 펴졌는지: 손가락 끝이 가운데 마디보다 손목에서 더 멀면 편 거예요.
-function isExtended(hand, tip, joint) {
-  return distance(hand[tip], hand[0]) > distance(hand[joint], hand[0]);
+// 깊이(z)까지 넣은 거리. 손을 앞으로 기울여도 손가락 길이를 제대로 재려고 써요.
+function distance3(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y, (a.z ?? 0) - (b.z ?? 0));
 }
 
-// 손바닥을 보여 주는 손인지: 검지 · 중지 · 약지 · 새끼 네 손가락을 모두 폈으면 돼요.
-function isOpenPalm(hand) {
+// 손가락이 펴졌는지: 손가락 끝이 가운데 마디보다 손목에서 더 멀면 편 거예요.
+function isExtended(hand, tip, joint) {
+  return distance3(hand[tip], hand[0]) > distance3(hand[joint], hand[0]);
+}
+
+// "거미줄 손 모양"인지: 중지 · 약지는 접고, 검지나 새끼 중 하나 이상은 폈다.
+// (손을 기울이면 한쪽 손가락이 접힌 것처럼 보일 수 있어서, 둘 중 하나만 펴져 있어도 인정해요)
+function isWebPose(hand) {
   return (
+    !isExtended(hand, 12, 10) &&
+    !isExtended(hand, 16, 14) &&
+    (isExtended(hand, 8, 6) || isExtended(hand, 20, 18))
+  );
+}
+
+// 손바닥을 보여 주는 손인지. 아래 네 가지가 모두 맞아야 해요.
+// side = MediaPipe 가 알려 준 손의 종류 { categoryName: "Left" 또는 "Right", score: 확신하는 정도 }
+function isOpenPalm(hand, side) {
+  // ① 다섯 손가락을 모두 폈다.
+  //    엄지는 접으면 끝이 손바닥 안쪽(중지 뿌리 9 근처)으로 들어와요. 거기서 충분히 떨어져 있으면 편 거예요.
+  const thumbOpen = distance3(hand[4], hand[9]) > distance3(hand[0], hand[9]) * THUMB_OPEN;
+  const allOpen =
+    thumbOpen &&
     isExtended(hand, 8, 6) &&
     isExtended(hand, 12, 10) &&
     isExtended(hand, 16, 14) &&
-    isExtended(hand, 20, 18)
-  );
+    isExtended(hand, 20, 18);
+
+  // ② 손끝이 위를 향한다. (손목 0 → 중지 뿌리 9 방향이 위쪽이고, 옆으로 많이 기울지 않음)
+  const up = hand[0].y - hand[9].y;
+  const upright = up > 0 && Math.abs(hand[9].x - hand[0].x) < up;
+
+  // ③ 손의 넓은 면이 카메라를 향한다. 옆으로 선 손은 폭이 좁게 보여요.
+  //    (폭 = 검지 뿌리 5 ~ 새끼 뿌리 17 · 길이 = 손목 0 ~ 중지 뿌리 9)
+  const wide = distance(hand[5], hand[17]) > distance(hand[0], hand[9]) * PALM_WIDTH;
+
+  // ④ 손등이 아니라 손바닥 쪽이 보인다.
+  //    손목에서 본 검지 뿌리(5)와 새끼 뿌리(17)의 "도는 방향"은 손바닥과 손등이 서로 반대예요.
+  //    어느 쪽이 손바닥인지는 왼손 · 오른손에 따라 달라서, 손의 종류를 확실히 알 때만 인정해요.
+  //    (기준은 실제 손바닥 · 손등 사진을 모델에 넣어 보고 정했어요)
+  const turn =
+    (hand[5].x - hand[0].x) * (hand[17].y - hand[0].y) -
+    (hand[5].y - hand[0].y) * (hand[17].x - hand[0].x);
+  const palmSide =
+    side?.score >= SIDE_CONFIDENCE && (side.categoryName === "Right" ? turn < 0 : turn > 0);
+
+  return allOpen && upright && wide && palmSide;
 }
 
 function between(min, max) {
   return min + Math.random() * (max - min);
+}
+
+// ───────── 효과음 "슈욱-챱" ─────────
+// 소리 파일 없이, 브라우저가 "쉬이이" 하는 잡음을 만들어서 다듬어요.
+// context = 소리를 만드는 도구 (보통은 audio 를 그대로 써요)
+function playShootSound(context = audio) {
+  if (!SOUND_ON || !context) return;
+  const start = context.currentTime;
+
+  // 재료: 0.5초짜리 잡음(무작위 숫자) — 바람 소리나 물 튀는 소리의 바탕이 돼요.
+  const noise = context.createBuffer(1, context.sampleRate * 0.5, context.sampleRate);
+  const samples = noise.getChannelData(0);
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.random() * 2 - 1;
+  const playNoise = (when, filter, gain) => {
+    const source = context.createBufferSource();
+    source.buffer = noise;
+    source.connect(filter).connect(gain).connect(context.destination);
+    source.start(when);
+    source.stop(when + 0.4);
+  };
+
+  // ① "슈욱" (0 ~ 0.17초): 잡음에서 높은 음 대역만 좁게 남기고, 그 음높이를 빠르게 쓸어 올려요.
+  //    (대역이 좁고 높을수록 날카로운 바람 소리가 돼요)
+  const whoosh = context.createBiquadFilter();
+  whoosh.type = "bandpass";
+  whoosh.Q.value = 3;
+  whoosh.frequency.setValueAtTime(1200, start);
+  whoosh.frequency.exponentialRampToValueAtTime(7000, start + 0.16);
+  const whooshGain = context.createGain();
+  whooshGain.gain.setValueAtTime(0.001, start);
+  whooshGain.gain.exponentialRampToValueAtTime(SOUND_VOLUME * 3, start + 0.11); // 점점 커지다가
+  whooshGain.gain.exponentialRampToValueAtTime(0.001, start + 0.17); // 휙 사라져요
+  playNoise(start, whoosh, whooshGain);
+
+  // ② "챱!" (0.18초 ~): 낮은 음은 빼고, 높고 짧은 소리 두 개를 바짝 붙여요.
+  //    북처럼 울리지 않게 둘 다 0.1초 안에 뚝 끊어요.
+  const hit = start + 0.18;
+
+  // "ㅊ": 아주 높은 음만 남긴 잡음이 0.035초 동안 "칙!"
+  const crack = context.createBiquadFilter();
+  crack.type = "highpass";
+  crack.frequency.value = 3500;
+  const crackGain = context.createGain();
+  crackGain.gain.setValueAtTime(SOUND_VOLUME * 0.9, hit);
+  crackGain.gain.exponentialRampToValueAtTime(0.001, hit + 0.035);
+  playNoise(hit, crack, crackGain);
+
+  // "얍": 바로 뒤에 조금 낮은(그래도 높은) 음이 0.06초 동안 "착!" 하고 달라붙어요.
+  const smack = context.createBiquadFilter();
+  smack.type = "bandpass";
+  smack.Q.value = 2.5;
+  smack.frequency.value = 1900;
+  const smackGain = context.createGain();
+  smackGain.gain.setValueAtTime(0.001, hit);
+  smackGain.gain.setValueAtTime(SOUND_VOLUME * 2, hit + 0.012);
+  smackGain.gain.exponentialRampToValueAtTime(0.001, hit + 0.075);
+  playNoise(hit, smack, smackGain);
 }
 
 // ───────── 거미줄 그리기 ─────────
@@ -175,7 +335,7 @@ function drawAll(now) {
 
   drawHero(ctx, now, width, height);
 
-  // 조준점: 검지가 가리키는 자리에 빨간 작은 점 (손 그림은 그리지 않아요)
+  // 빨간 작은 점: 접은 두 손가락의 등이 있는 자리 (손 그림은 그리지 않아요)
   if (SHOW_AIM) {
     ctx.fillStyle = "#ff2d2d";
     for (const aim of aims) {
@@ -202,75 +362,84 @@ function handleFrame(result, now) {
   const seenHands = new Set();
   aims = []; // 조준점은 프레임마다 새로 모아요
   let palmX = null; // 손바닥을 보여 주는 손의 가로 위치 (없으면 null)
+  let poseSeen = false; // 거미줄 손 모양인 손이 있는지
   result.landmarks.forEach((landmarks, index) => {
     const name = result.handedness[index]?.[0]?.categoryName ?? String(index);
     seenHands.add(name);
-    // history = 최근 손바닥 높이 기록 · armed = 쏠 준비가 됐는지 · firedY = 마지막으로 쏜 높이
+    // history = 최근 높이 기록 · armed = 쏠 준비가 됐는지 · firedY = 마지막으로 쏜 높이 · aim = 빨간 점 위치
     const state = hands.get(name) ?? { history: [], armed: true, firedY: 0, aim: null };
     hands.set(name, state);
 
-    // ── 조준: 검지 뿌리(5) → 검지 끝(8) 방향으로, 끝에서 손가락 길이의 REACH 배만큼 더 간 자리 ──
-    // 먼저 두 점을 창 안의 위치(픽셀)로 옮겨요. 거울처럼 움직이도록 x 는 좌우를 뒤집어요.
+    // 점 위치(0~1 비율)를 창 안의 위치(픽셀)로 옮겨요. 거울처럼 움직이도록 x 는 좌우를 뒤집어요.
     const toScreen = (point) => ({
       x: offsetX + (1 - point.x) * videoWidth * scale,
       y: offsetY + point.y * videoHeight * scale,
     });
-    const base = toScreen(landmarks[5]);
-    const tip = toScreen(landmarks[8]);
-    // 검지를 화면 쪽으로 똑바로 향하면 손가락이 짧게 보여서 끝 근처를,
-    // 옆으로 눕히면 길게 보여서 그 방향으로 멀리를 가리키게 돼요.
-    // 화면 밖을 가리키면 화면 가장자리에 붙여요. (0~1 사이로 자르기)
-    const target = {
-      x: Math.min(1, Math.max(0, (tip.x + (tip.x - base.x) * REACH) / width)),
-      y: Math.min(1, Math.max(0, (tip.y + (tip.y - base.y) * REACH) / height)),
-    };
-    // 손이 조금 떨려도 조준점이 튀지 않게, 지난 위치와 섞어서 부드럽게 움직여요.
-    state.aim = state.aim
-      ? {
-          x: state.aim.x + (target.x - state.aim.x) * AIM_SMOOTH,
-          y: state.aim.y + (target.y - state.aim.y) * AIM_SMOOTH,
-        }
-      : target;
-    aims.push(state.aim);
 
     // 손바닥을 보여 주는 손이면 그 가로 위치를 기억해요. (캐릭터가 그 위에서 내려와요)
-    if (isOpenPalm(landmarks)) {
+    if (isOpenPalm(landmarks, result.handedness[index]?.[0])) {
       palmX = toScreen({ x: (landmarks[0].x + landmarks[9].x) / 2, y: 0 }).x / width;
     }
 
-    // 손바닥 가운데 = 손목(0)과 중지 뿌리(9)의 중간. y 는 아래로 갈수록 커져요.
-    const palmY = (landmarks[0].y + landmarks[9].y) / 2;
-    const palmLength = distance(landmarks[0], landmarks[9]);
+    // ── 쏘기: 접은 두 손가락의 "등" = 중지 가운데 마디(10)와 약지 가운데 마디(14)의 중간 ──
+    // 이 한 점만 따라가요. y 는 아래로 갈수록 커져요.
+    const knuckle = {
+      x: (landmarks[10].x + landmarks[14].x) / 2,
+      y: (landmarks[10].y + landmarks[14].y) / 2,
+    };
+    const palmLength = distance(landmarks[0], landmarks[9]); // 손 크기의 기준
+    const pose = isWebPose(landmarks);
+    if (pose) poseSeen = true;
 
-    // 최근 DROP_MS 동안의 높이와 그때의 조준점을 기억해요.
-    state.history.push({ time: now, y: palmY, aim: state.aim });
+    // 빨간 점: 거미줄 손 모양일 때만, 접은 두 손가락의 등 위에 보여요. (부드럽게 따라가요)
+    if (pose) {
+      const onScreen = toScreen(knuckle);
+      const target = {
+        x: Math.min(1, Math.max(0, onScreen.x / width)),
+        y: Math.min(1, Math.max(0, onScreen.y / height)),
+      };
+      state.aim = state.aim
+        ? {
+            x: state.aim.x + (target.x - state.aim.x) * AIM_SMOOTH,
+            y: state.aim.y + (target.y - state.aim.y) * AIM_SMOOTH,
+          }
+        : target;
+      aims.push(state.aim);
+    } else {
+      state.aim = null;
+    }
+
+    // 최근 DROP_MS 동안의 높이와, 그때 손 모양이 맞았는지를 기억해요.
+    state.history.push({ time: now, y: knuckle.y, pose });
     state.history = state.history.filter((item) => now - item.time <= DROP_MS);
-    // 그동안 가장 높이 있던 순간 = 손을 내리기 시작한 순간
-    const start = state.history.reduce((top, item) => (item.y < top.y ? item : top));
-    // 거기서 지금까지 얼마나 내려왔는지
-    const dropped = palmY - start.y >= palmLength * DROP_AMOUNT;
+    // 그동안 가장 높이 있던 곳에서 지금까지 얼마나 내려왔는지
+    const highest = Math.min(...state.history.map((item) => item.y));
+    const dropped = knuckle.y - highest >= palmLength * DROP_AMOUNT;
+    // 그동안 손 모양이 얼마나 유지됐는지 (잠깐 잘못 본 프레임은 봐줘요)
+    const poseKept =
+      state.history.filter((item) => item.pose).length / state.history.length >= POSE_RATIO;
 
-    if (palmY < state.firedY - palmLength * DROP_AMOUNT * 0.5) {
-      // 쏜 자리보다 손을 다시 올렸으면 → 또 쏠 수 있어요
+    if (!pose || knuckle.y < state.firedY - palmLength * DROP_AMOUNT * 0.5) {
+      // 손 모양을 풀었거나, 쏜 자리보다 손을 다시 올렸으면 → 또 쏠 수 있어요
       state.armed = true;
     }
 
-    if (dropped && state.armed) {
-      // 쏘기! 손을 내리는 동안에는 조준점도 같이 내려가니까,
-      // "내리기 시작한 순간"에 검지가 가리키던 자리에 거미줄을 붙여요.
+    if (pose && poseKept && dropped && state.armed) {
+      // 쏘기! 빨간 점이 있는 자리(접은 두 손가락의 등)에 거미줄을 붙여요.
       webs.push({
-        x: start.aim.x,
-        y: start.aim.y,
-        image: WEB_IMAGES[Math.floor(Math.random() * WEB_IMAGES.length)], // 5장 중 랜덤
+        x: state.aim.x,
+        y: state.aim.y,
+        image: WEB_IMAGES[Math.floor(Math.random() * WEB_IMAGES.length)], // 여러 장 중 랜덤
         size: between(0.75, 1.05),
         turn: between(-0.2, 0.2), // 사진 모양을 살리려고 아주 조금만 돌려요
         born: now,
       });
+      playShootSound(); // 슈욱-챱!
       shots++;
       shotsText.textContent = `쏜 거미줄 ${shots}개`;
       state.armed = false; // 한 번 내릴 때 한 발만
-      state.firedY = palmY;
-      state.history = []; // 내려온 기록을 비워서, 다시 내려와야 또 쏴져요
+      state.firedY = knuckle.y;
+      state.history = []; // 기록을 비워서, 다시 내려와야 또 쏴져요
     }
   });
 
@@ -281,22 +450,25 @@ function handleFrame(result, now) {
 
   // ── 캐릭터 등장 · 퇴장 ──
   if (palmX !== null) {
-    palmGoneSince = null;
-    palmSince ??= now; // 손바닥이 보이기 시작한 시각을 적어 둬요
+    // 인식이 잠깐 끊겼다 이어진 것은 계속 보고 있던 것으로 쳐요.
+    if (now - palmLastSeen > PALM_GRACE_MS) palmSince = now;
+    palmLastSeen = now;
     if (!hero && now - palmSince >= HERO_SHOW_MS) {
       // 등장! 화면 밖으로 나가지 않게 가로 위치는 15%~85% 사이로
       hero = { x: Math.min(0.85, Math.max(0.15, palmX)), born: now, leaveAt: null };
     }
-  } else {
-    palmSince = null;
-    if (hero && hero.leaveAt === null) {
-      palmGoneSince ??= now;
-      if (now - palmGoneSince >= HERO_HIDE_MS) hero.leaveAt = now; // 퇴장 시작
-    }
+  } else if (hero && hero.leaveAt === null && now - palmLastSeen >= HERO_HIDE_MS) {
+    hero.leaveAt = now; // 손바닥이 한동안 안 보이면 퇴장 시작
   }
 
   // 손 그림은 그리지 않아요. 대신 손을 찾았는지만 글자로 알려 줘요. (바뀔 때만 고쳐요)
-  const status = seenHands.size > 0 ? "손을 찾았어요" : "손을 보여 주세요";
+  const status = poseSeen
+    ? "거미줄 손 모양이에요 · 아래로 내리면 쏴져요"
+    : palmX !== null
+      ? "손바닥이 보여요"
+      : seenHands.size > 0
+        ? "손을 찾았어요"
+        : "손을 보여 주세요";
   if (handText.textContent !== status) handText.textContent = status;
 
   drawAll(now);
@@ -313,6 +485,18 @@ function loop() {
 
 // ───────── 카메라 켜기 · 끄기 ─────────
 async function startCamera() {
+  // 브라우저는 "사용자가 버튼을 누른 뒤"에만 소리를 낼 수 있게 해요. 그래서 여기서 준비해요.
+  if (SOUND_ON && !audio) {
+    try {
+      audio = new AudioContext();
+    } catch {
+      audio = null; // 소리를 못 쓰는 브라우저면 소리 없이 진행해요
+    }
+  }
+  audio?.resume();
+  // 배경 음악도 버튼을 누른 이때 시작해요.
+  startMusic();
+
   cameraBtn.disabled = true;
   messageText.hidden = true;
   placeholder.textContent = "불러오는 중…";
@@ -326,6 +510,10 @@ async function startCamera() {
         baseOptions: { modelAssetPath: MODEL_URL },
         runningMode: "VIDEO", // 카메라처럼 이어지는 화면
         numHands: 2, // 양손까지
+        // 확실한 손만 인정해요. (손이 아닌 것을 손으로 잘못 보는 일을 줄여요)
+        minHandDetectionConfidence: HAND_CONFIDENCE,
+        minHandPresenceConfidence: HAND_CONFIDENCE,
+        minTrackingConfidence: HAND_CONFIDENCE,
       });
     }
   } catch {
@@ -351,6 +539,7 @@ async function startCamera() {
 
 function stopCamera() {
   cancelAnimationFrame(loopId);
+  stopMusic();
   // 카메라를 끄면 카메라 불도 꺼져요. 화면의 거미줄도 같이 지워요.
   stream?.getTracks().forEach((track) => track.stop());
   stream = null;
@@ -360,19 +549,20 @@ function stopCamera() {
   aims = [];
   hero = null;
   palmSince = null;
-  palmGoneSince = null;
+  palmLastSeen = -Infinity;
   drawAll(performance.now());
   handText.textContent = "";
   placeholder.hidden = false;
-  placeholder.textContent = "카메라를 켜고, 검지로 가리키며 손을 아래로 내려 보세요";
+  placeholder.textContent = "카메라를 켜고, 중지 · 약지를 접은 손을 위에서 아래로 내려 보세요";
   cameraBtn.textContent = "카메라 켜기";
   cameraBtn.disabled = false;
 }
 
 function showMessage(text) {
+  stopMusic(); // 카메라를 못 켰으면 음악도 멈춰요
   messageText.textContent = text;
   messageText.hidden = false;
-  placeholder.textContent = "카메라를 켜고, 검지로 가리키며 손을 아래로 내려 보세요";
+  placeholder.textContent = "카메라를 켜고, 중지 · 약지를 접은 손을 위에서 아래로 내려 보세요";
   cameraBtn.disabled = false;
 }
 
